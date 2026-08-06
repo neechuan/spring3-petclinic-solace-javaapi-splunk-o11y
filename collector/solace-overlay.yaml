@@ -1,0 +1,40 @@
+# Overlay merged onto the bundled Splunk gateway_config.yaml via a second
+# --config flag (OTel confmap deep-merges maps, so this only ADDS a receiver and
+# a pipeline; it never edits the base traces pipeline's exporter list).
+#
+# The `solace` receiver (bundled, beta) consumes broker distributed-tracing spans
+# from the #telemetry-<profile> queue over plaintext AMQP and feeds a dedicated
+# traces/solace pipeline that reuses the base memory_limiter + batch processors
+# and the otlp_http exporter (Splunk APM ingest).
+#
+# Credentials + profile come from the environment (forwarded by run-collector.sh
+# from .env) so no secrets live in this file.
+receivers:
+  solace:
+    # Reached over the shared podman network by container name.
+    broker: [petclinic-solace:5672]
+    auth:
+      sasl_plain:
+        username: ${env:SOLACE_TELEMETRY_USERNAME}
+        password: ${env:SOLACE_TELEMETRY_PASSWORD}
+    queue: "queue://#telemetry-${env:SOLACE_TELEMETRY_PROFILE}"
+    # Plaintext AMQP (amqp:// not amqps://) for the local lab.
+    tls:
+      insecure: true
+
+processors:
+  attributes:
+    actions:
+      - key: deployment.environment
+        value: lab
+        action: insert
+      - key: service.version
+        value: 1.0
+        action: insert
+
+service:
+  pipelines:
+    traces/solace:
+      receivers: [solace]
+      processors: [memory_limiter, attributes, batch]
+      exporters: [otlp_http]

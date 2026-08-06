@@ -1,0 +1,7 @@
+# Local secrets / environment overrides
+.cursor
+.github
+.vscode
+docs/*
+.env
+logs/*
