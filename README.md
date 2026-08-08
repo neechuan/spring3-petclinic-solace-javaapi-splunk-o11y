@@ -448,6 +448,39 @@ defaults (override from environment):
 | `OTEL_RESOURCE_ATTRIBUTES`    | `deployment.environment=lab,service.version=1.0` | Resource metadata.                                     |
 | `OTEL_ENABLED`                | `true`                                           | Set to`false` to run jars without the agent.         |
 
+### Minimal Prometheus monitoring (local)
+
+This repository includes a minimal Prometheus setup to scrape:
+
+- Collector metrics at `splunk-otel-collector:8888`
+
+Use the dedicated script [`run-prometheus.sh`](run-prometheus.sh):
+
+```bash
+./run-all.sh solace          # start the broker container
+./run-collector.sh up        # start the Splunk OTel Collector
+./run-prometheus.sh up       # start Prometheus on http://localhost:9090
+```
+
+Open [http://localhost:9090/targets](http://localhost:9090/targets) and verify
+`otel_collector` is `UP`.
+
+Quick checks from the Prometheus expression browser:
+
+```text
+up{job="otel_collector"}
+```
+
+Both should evaluate to `1` when healthy.
+
+Lifecycle commands:
+
+```bash
+./run-prometheus.sh status
+./run-prometheus.sh logs
+./run-prometheus.sh down
+```
+
 ## Viewing logs
 
 When `run-all.sh` runs apps in the background, each writes to its own file under

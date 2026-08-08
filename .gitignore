@@ -5,3 +5,7 @@
 docs/*
 .env
 logs/*
+git-instructions.md
+prometheus/data/*
+backend/target/*
+frontend/target/*
