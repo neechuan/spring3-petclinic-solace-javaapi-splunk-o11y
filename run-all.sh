@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 #
 # Start the Solace PetClinic stack, all together or one service at a time:
-#   solace     Solace PubSub+ broker  (detached container)
-#   backend    persistence + JCSMP replier   (http://localhost:8081)
-#   frontend   UI + JCSMP requestor          (http://localhost:8080)
-#   all        solace + backend + frontend   (default)
+#   solace      Solace PubSub+ broker  (detached container)
+#   collector   Splunk OTel Collector   (detached container, grpc :4317 / http :4318)
+#   prometheus  Prometheus metrics server (detached container, http://localhost:9090)
+#   backend     persistence + JCSMP replier   (http://localhost:8081)
+#   frontend    UI + JCSMP requestor          (http://localhost:8080)
+#   all         solace + collector + prometheus + backend + frontend   (default)
 #
 # A single requested app runs in the foreground with live logs (Ctrl+C stops
 # it). Multiple apps run in the background (logs in ./logs) and are stopped
@@ -27,18 +29,22 @@ usage() {
 Usage: ./run-all.sh [target ...]
 
 Targets:
-  solace     Start the Solace PubSub+ broker (detached container)
-  backend    Start the backend  (persistence + replier, http://localhost:8081)
-  frontend   Start the frontend (UI + requestor,        http://localhost:8080)
-  apps       Start backend then frontend (no broker)
-  all        Start solace, backend and frontend (default)
+  solace      Start the Solace PubSub+ broker (detached container)
+  collector   Start the Splunk OTel Collector (detached container, grpc :4317 / http :4318)
+  prometheus  Start Prometheus (detached container, http://localhost:9090)
+  backend     Start the backend  (persistence + replier, http://localhost:8081)
+  frontend    Start the frontend (UI + requestor,        http://localhost:8080)
+  apps        Start backend then frontend (no broker)
+  all         Start solace, collector, prometheus, backend and frontend (default)
 
 Examples:
-  ./run-all.sh                 # start everything
-  ./run-all.sh solace          # just the broker
-  ./run-all.sh backend         # just the backend (live logs; Ctrl+C to stop)
-  ./run-all.sh apps            # backend then frontend
-  ./run-all.sh solace backend  # broker + backend
+  ./run-all.sh                    # start everything
+  ./run-all.sh solace             # just the broker
+  ./run-all.sh collector          # just the OTel collector
+  ./run-all.sh prometheus         # just Prometheus
+  ./run-all.sh backend            # just the backend (live logs; Ctrl+C to stop)
+  ./run-all.sh apps               # backend then frontend
+  ./run-all.sh solace prometheus  # broker + Prometheus
 EOF
 }
 
@@ -53,16 +59,18 @@ else
 fi
 
 # ---- parse targets ---------------------------------------------------------
-want_solace=0 want_backend=0 want_frontend=0
+want_solace=0 want_collector=0 want_prometheus=0 want_backend=0 want_frontend=0
 targets=("$@")
 [ ${#targets[@]} -eq 0 ] && targets=(all)
 for t in "${targets[@]}"; do
   case "$t" in
-    all)      want_solace=1; want_backend=1; want_frontend=1 ;;
-    apps)     want_backend=1; want_frontend=1 ;;
-    solace)   want_solace=1 ;;
-    backend)  want_backend=1 ;;
-    frontend) want_frontend=1 ;;
+    all)        want_solace=1; want_collector=1; want_prometheus=1; want_backend=1; want_frontend=1 ;;
+    apps)       want_backend=1; want_frontend=1 ;;
+    solace)     want_solace=1 ;;
+    collector)  want_collector=1 ;;
+    prometheus) want_prometheus=1 ;;
+    backend)    want_backend=1 ;;
+    frontend)   want_frontend=1 ;;
     -h|--help|help) usage; exit 0 ;;
     *) echo "error: unknown target '$t'" >&2; usage; exit 1 ;;
   esac
@@ -138,16 +146,20 @@ run_app_fg() {
   exec $MVN -f "$dir/pom.xml" -Dspring-boot.run.fork=false spring-boot:run
 }
 
-# ---- act, in canonical order: solace, backend, frontend --------------------
-[ $want_solace -eq 1 ] && run_solace
+run_prometheus() {
+  "$(dirname "$0")/run-prometheus.sh" up
+}
+
+run_collector() {
+  "$(dirname "$0")/run-collector.sh" up
+}
+
+# ---- act, in canonical order: solace, collector, prometheus, backend, frontend
+[ $want_solace -eq 1 ]     && run_solace
+[ $want_collector -eq 1 ]  && run_collector
+[ $want_prometheus -eq 1 ] && run_prometheus
 
 java_count=$((want_backend + want_frontend))
-
-if [ "$java_count" -eq 0 ]; then
-  [ $want_solace -eq 1 ] && \
-    echo "Solace Manager UI : http://localhost:8088/  (admin / admin)"
-  exit 0
-fi
 
 if [ "$java_count" -eq 1 ]; then
   if [ $want_backend -eq 1 ]; then
@@ -157,6 +169,15 @@ if [ "$java_count" -eq 1 ]; then
   fi
 fi
 
+if [ $want_solace -eq 0 ] && [ $want_collector -eq 0 ] && [ $want_prometheus -eq 0 ] && [ "$java_count" -eq 0 ]; then
+  exit 0
+elif [ "$java_count" -eq 0 ]; then
+  [ $want_solace -eq 1 ]     && echo "  Solace Manager UI : http://localhost:8088/  (admin / admin)"
+  [ $want_collector -eq 1 ]  && echo "  OTel Collector    : grpc :4317 / http :4318"
+  [ $want_prometheus -eq 1 ] && echo "  Prometheus UI     : http://localhost:9090/"
+  exit 0
+fi
+
 # Two or more apps: background them and wait together.
 trap cleanup INT TERM
 [ $want_backend -eq 1 ]  && start_app_bg backend  backend  "http://localhost:8081/actuator/health"
@@ -164,9 +185,11 @@ trap cleanup INT TERM
 
 echo
 echo "Services are up:"
-[ $want_frontend -eq 1 ] && echo "  PetClinic UI      : http://localhost:8080/"
-[ $want_backend -eq 1 ]  && echo "  Backend health    : http://localhost:8081/actuator/health"
-[ $want_solace -eq 1 ]   && echo "  Solace Manager UI : http://localhost:8088/  (admin / admin)"
+[ $want_frontend -eq 1 ]   && echo "  PetClinic UI      : http://localhost:8080/"
+[ $want_backend -eq 1 ]    && echo "  Backend health    : http://localhost:8081/actuator/health"
+[ $want_solace -eq 1 ]     && echo "  Solace Manager UI : http://localhost:8088/  (admin / admin)"
+[ $want_collector -eq 1 ]  && echo "  OTel Collector    : grpc :4317 / http :4318 (health :13133)"
+[ $want_prometheus -eq 1 ] && echo "  Prometheus UI     : http://localhost:9090/"
 echo
 echo "Logs in $LOG_DIR/. Press Ctrl+C to stop the app(s)."
 wait

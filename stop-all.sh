@@ -2,11 +2,13 @@
 #
 # Stop the Solace PetClinic stack - the reverse of run-all.sh. Stop everything
 # or one service at a time:
-#   frontend   Stop the frontend (whatever is listening on 8080)
-#   backend    Stop the backend  (whatever is listening on 8081)
-#   solace     Stop and remove the Solace broker container
-#   apps       Stop frontend and backend (no broker)
-#   all        Stop frontend, backend and solace (default)
+#   frontend    Stop the frontend (whatever is listening on 8080)
+#   backend     Stop the backend  (whatever is listening on 8081)
+#   collector   Stop and remove the Splunk OTel Collector container
+#   prometheus  Stop and remove the Prometheus container
+#   solace      Stop and remove the Solace broker container
+#   apps        Stop frontend and backend (no broker)
+#   all         Stop frontend, backend, collector, prometheus and solace (default)
 #
 # Services are stopped in the reverse of run-all.sh's start order:
 # frontend, then backend, then solace.
@@ -20,31 +22,37 @@ usage() {
 Usage: ./stop-all.sh [target ...]
 
 Targets:
-  solace     Stop and remove the Solace PubSub+ broker container
-  backend    Stop the backend  (listening on 8081)
-  frontend   Stop the frontend (listening on 8080)
-  apps       Stop frontend and backend (no broker)
-  all        Stop frontend, backend and solace (default)
+  solace      Stop and remove the Solace PubSub+ broker container
+  collector   Stop and remove the Splunk OTel Collector container
+  prometheus  Stop and remove the Prometheus container
+  backend     Stop the backend  (listening on 8081)
+  frontend    Stop the frontend (listening on 8080)
+  apps        Stop frontend and backend (no broker)
+  all         Stop frontend, backend, collector, prometheus and solace (default)
 
 Examples:
   ./stop-all.sh                # stop everything
   ./stop-all.sh solace         # just the broker
+  ./stop-all.sh collector      # just the OTel collector
+  ./stop-all.sh prometheus     # just Prometheus
   ./stop-all.sh frontend       # just the frontend
   ./stop-all.sh apps           # frontend + backend
 EOF
 }
 
 # ---- parse targets ---------------------------------------------------------
-want_solace=0 want_backend=0 want_frontend=0
+want_solace=0 want_collector=0 want_prometheus=0 want_backend=0 want_frontend=0
 targets=("$@")
 [ ${#targets[@]} -eq 0 ] && targets=(all)
 for t in "${targets[@]}"; do
   case "$t" in
-    all)      want_solace=1; want_backend=1; want_frontend=1 ;;
-    apps)     want_backend=1; want_frontend=1 ;;
-    solace)   want_solace=1 ;;
-    backend)  want_backend=1 ;;
-    frontend) want_frontend=1 ;;
+    all)        want_solace=1; want_collector=1; want_prometheus=1; want_backend=1; want_frontend=1 ;;
+    apps)       want_backend=1; want_frontend=1 ;;
+    solace)     want_solace=1 ;;
+    collector)  want_collector=1 ;;
+    prometheus) want_prometheus=1 ;;
+    backend)    want_backend=1 ;;
+    frontend)   want_frontend=1 ;;
     -h|--help|help) usage; exit 0 ;;
     *) echo "error: unknown target '$t'" >&2; usage; exit 1 ;;
   esac
@@ -80,7 +88,27 @@ stop_solace() {
   fi
 }
 
-# ---- act in reverse order: frontend, backend, solace -----------------------
-[ $want_frontend -eq 1 ] && stop_port frontend 8080
-[ $want_backend -eq 1 ]  && stop_port backend  8081
-[ $want_solace -eq 1 ]   && stop_solace
+stop_prometheus() {
+  local name="${PROMETHEUS_CONTAINER_NAME:-petclinic-prometheus}"
+  if podman rm -f "$name" >/dev/null 2>&1; then
+    echo "Prometheus stopped."
+  else
+    echo "prometheus: not running."
+  fi
+}
+
+stop_collector() {
+  local name="${SPLUNK_COLLECTOR_NAME:-splunk-otel-collector}"
+  if podman rm -f "$name" >/dev/null 2>&1; then
+    echo "OTel Collector stopped."
+  else
+    echo "collector: not running."
+  fi
+}
+
+# ---- act in reverse order: frontend, backend, collector, prometheus, solace -
+[ $want_frontend -eq 1 ]   && stop_port frontend 8080
+[ $want_backend -eq 1 ]    && stop_port backend  8081
+[ $want_collector -eq 1 ]  && stop_collector
+[ $want_prometheus -eq 1 ] && stop_prometheus
+[ $want_solace -eq 1 ]     && stop_solace
